@@ -1,45 +1,35 @@
-export const runtime = "edge";
-// Run near EU for public gov endpoints
-export const preferredRegion = ["fra1","cdg1","dub1","arn1"];
+import { NextResponse } from "next/server";
 
-async function tryFetch(url: string) {
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const { TENDER_USER, TENDER_PASS } = process.env as Record<string, string>;
+  if (!TENDER_USER || !TENDER_PASS) {
+    return NextResponse.json({ error: "Missing TenderNed credentials" }, { status: 500 });
+  }
+
+  const auth = "Basic " + Buffer.from(`${TENDER_USER}:${TENDER_PASS}`).toString("base64");
+
+  // Swagger: GET /papi/tenderned-rs-xml/publicaties/{publicatieId}/public-xml
+  const url = `https://www.tenderned.nl/papi/tenderned-rs-xml/publicaties/${encodeURIComponent(
+    params.id
+  )}/public-xml`;
+
   const res = await fetch(url, {
     headers: {
-      "Accept": "application/json",
-      // sommige endpoints weigeren requests zonder UA
+      Authorization: auth,
+      Accept: "application/xml",
       "User-Agent": "TenderStarter/1.0 (+vercel)"
     },
-    cache: "no-store",
+    cache: "no-store"
   });
-  let text = await res.text();
-  // truncate for safety
-  const preview = text.slice(0, 800);
-  // probeer JSON te parsen voor extra hint
-  let json: any = null;
-  try { json = JSON.parse(text); } catch { /* ignore */ }
-  // tel items als we de bekende structuur zien
-  let inferredCount: number | null = null;
-  const items = json?._embedded?.publicaties ?? json?.publicaties ?? null;
-  if (Array.isArray(items)) inferredCount = items.length;
 
-  return { url, status: res.status, ok: res.ok, inferredCount, previewType: json ? "json" : "text", preview };
-}
+  const text = await res.text();
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const page = searchParams.get("page") ?? "0";
-  const size = searchParams.get("size") ?? "25";
+  if (!res.ok) {
+    return NextResponse.json(
+      { error: "TenderNed XML API error", status: res.status, url, preview: text.slice(0, 800) },
+      { status: res.status }
+    );
+  }
 
-  const urls = [
-    `https://www.tenderned.nl/papi/tenderned-rs-tns/v2/publicaties?page=${page}&size=${size}`,
-    `https://www.tenderned.nl/papi/tenderned-rs-tns/publicaties?page=${page}&size=${size}`,
-    `https://www.tenderned.nl/info/api/publicaties?page=${page}&size=${size}`,
-  ];
-
-  const results = [];
-  for (const u of urls) results.push(await tryFetch(u));
-
-  return new Response(JSON.stringify({ tried: results }, null, 2), {
-    headers: { "Content-Type": "application/json" },
-  });
+  return new NextResponse(text, { headers: { "Content-Type": "application/xml" } });
 }
